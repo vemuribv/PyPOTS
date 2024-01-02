@@ -85,11 +85,12 @@ class VaDER(BaseNNClusterer):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
     References
     ----------
@@ -220,16 +221,16 @@ class VaDER(BaseNNClusterer):
                     gmm.fit(samples)
                     flag = 1
                 except ValueError as e:
-                    logger.error(e)
+                    logger.error(f"❌ Exception: {e}")
                     logger.warning(
-                        "Met with ValueError, double `reg_covar` to re-train the GMM model."
+                        "‼️ Met with ValueError, double `reg_covar` to re-train the GMM model."
                     )
 
                     flag -= 1
                     if flag == -5:
                         logger.error(
-                            f"Doubled `reg_covar` for 4 times, whose current value is {reg_covar}, but still failed.\n"
-                            "Now quit to let you check your model training.\n"
+                            f"❌ Doubled `reg_covar` for 4 times, its current value is {reg_covar}, but still failed.\n"
+                            f"Now quit to let you check your model training.\n"
                             "Please raise an issue https://github.com/WenjieDu/PyPOTS/issues if you have questions."
                         )
                         raise RuntimeError
@@ -260,7 +261,7 @@ class VaDER(BaseNNClusterer):
 
         try:
             training_step = 0
-            for epoch in range(self.epochs):
+            for epoch in range(1, self.epochs + 1):
                 self.model.train()
                 epoch_train_loss_collector = []
                 for idx, data in enumerate(training_loader):
@@ -300,13 +301,15 @@ class VaDER(BaseNNClusterer):
                         self._save_log_into_tb_file(epoch, "validating", val_loss_dict)
 
                     logger.info(
-                        f"Epoch {epoch} - "
+                        f"Epoch {epoch:03d} - "
                         f"training loss: {mean_train_loss:.4f}, "
                         f"validating loss: {mean_val_loss:.4f}"
                     )
                     mean_loss = mean_val_loss
                 else:
-                    logger.info(f"Epoch {epoch} - training loss: {mean_train_loss:.4f}")
+                    logger.info(
+                        f"Epoch {epoch:03d} - training loss: {mean_train_loss:.4f}"
+                    )
                     mean_loss = mean_train_loss
 
                 if np.isnan(mean_loss):
@@ -318,13 +321,14 @@ class VaDER(BaseNNClusterer):
                     self.best_loss = mean_loss
                     self.best_model_dict = self.model.state_dict()
                     self.patience = self.original_patience
-                    # save the model if necessary
-                    self._auto_save_model_if_necessary(
-                        training_finished=False,
-                        saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
-                    )
                 else:
                     self.patience -= 1
+
+                # save the model if necessary
+                self._auto_save_model_if_necessary(
+                    confirm_saving=mean_loss < self.best_loss,
+                    saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
+                )
 
                 if os.getenv("enable_tuning", False):
                     nni.report_intermediate_result(mean_loss)
@@ -338,7 +342,7 @@ class VaDER(BaseNNClusterer):
                     break
 
         except Exception as e:
-            logger.error(f"Exception: {e}")
+            logger.error(f"❌ Exception: {e}")
             if self.best_model_dict is None:
                 raise RuntimeError(
                     "Training got interrupted. Model was not trained. Please investigate the error printed above."
@@ -388,7 +392,7 @@ class VaDER(BaseNNClusterer):
         self.model.eval()  # set the model as eval status to freeze it.
 
         # Step 3: save the model if necessary
-        self._auto_save_model_if_necessary(training_finished=True)
+        self._auto_save_model_if_necessary(confirm_saving=True)
 
     def predict(
         self,

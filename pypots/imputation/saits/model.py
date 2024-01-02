@@ -15,7 +15,6 @@ Partial implementation uses code from https://github.com/WenjieDu/SAITS.
 
 from typing import Union, Optional, Callable
 
-import h5py
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -24,6 +23,7 @@ from .data import DatasetForSAITS
 from .modules import _SAITS
 from ..base import BaseNNImputer
 from ...data.base import BaseDataset
+from ...data.checking import check_X_ori_in_val_set
 from ...optim.adam import Adam
 from ...optim.base import Optimizer
 from ...utils.logging import logger
@@ -91,6 +91,10 @@ class SAITS(BaseNNImputer):
         stopped when the model does not perform better after that number of epochs.
         Leaving it default as None will disable the early-stopping.
 
+    customized_loss_func:
+        The customized loss function designed by users for the model to optimize.
+        If not given, will use the default MAE loss as claimed in the original paper.
+
     optimizer :
         The optimizer for model training.
         If not given, will use a default Adam optimizer.
@@ -112,11 +116,12 @@ class SAITS(BaseNNImputer):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
     References
     ----------
@@ -162,6 +167,16 @@ class SAITS(BaseNNImputer):
             model_saving_strategy,
         )
 
+        if d_model != n_heads * d_k:
+            logger.warning(
+                "‼️ d_model must = n_heads * d_k, it should be divisible by n_heads "
+                f"and the result should be equal to d_k, but got d_model={d_model}, n_heads={n_heads}, d_k={d_k}"
+            )
+            d_model = n_heads * d_k
+            logger.warning(
+                f"⚠️ d_model is reset to {d_model} = n_heads ({n_heads}) * d_k ({d_k})"
+            )
+
         self.n_steps = n_steps
         self.n_features = n_features
         # model hype-parameters
@@ -206,22 +221,25 @@ class SAITS(BaseNNImputer):
     def _assemble_input_for_training(self, data: list) -> dict:
         (
             indices,
-            X_intact,
             X,
             missing_mask,
+            X_ori,
             indicating_mask,
         ) = self._send_data_to_given_device(data)
 
         inputs = {
             "X": X,
-            "X_intact": X_intact,
             "missing_mask": missing_mask,
+            "X_ori": X_ori,
             "indicating_mask": indicating_mask,
         }
 
         return inputs
 
-    def _assemble_input_for_validating(self, data) -> dict:
+    def _assemble_input_for_validating(self, data: list) -> dict:
+        return self._assemble_input_for_training(data)
+
+    def _assemble_input_for_testing(self, data: list) -> dict:
         indices, X, missing_mask = self._send_data_to_given_device(data)
 
         inputs = {
@@ -229,9 +247,6 @@ class SAITS(BaseNNImputer):
             "missing_mask": missing_mask,
         }
         return inputs
-
-    def _assemble_input_for_testing(self, data) -> dict:
-        return self._assemble_input_for_validating(data)
 
     def fit(
         self,
@@ -241,7 +256,7 @@ class SAITS(BaseNNImputer):
     ) -> None:
         # Step 1: wrap the input data with classes Dataset and DataLoader
         training_set = DatasetForSAITS(
-            train_set, return_labels=False, file_type=file_type
+            train_set, return_X_ori=False, return_labels=False, file_type=file_type
         )
         training_loader = DataLoader(
             training_set,
@@ -251,30 +266,11 @@ class SAITS(BaseNNImputer):
         )
         val_loader = None
         if val_set is not None:
-            if isinstance(val_set, str):
-                with h5py.File(val_set, "r") as hf:
-                    # Here we read the whole validation set from the file to mask a portion for validation.
-                    # In PyPOTS, using a file usually because the data is too big. However, the validation set is
-                    # generally shouldn't be too large. For example, we have 1 billion samples for model training.
-                    # We won't take 20% of them as the validation set because we want as much as possible data for the
-                    # training stage to enhance the model's generalization ability. Therefore, 100,000 representative
-                    # samples will be enough to validate the model.
-                    val_set = {
-                        "X": hf["X"][:],
-                        "X_intact": hf["X_intact"][:],
-                        "indicating_mask": hf["indicating_mask"][:],
-                    }
-
-            # check if X_intact contains missing values
-            if np.isnan(val_set["X_intact"]).any():
-                val_set["X_intact"] = np.nan_to_num(val_set["X_intact"], nan=0)
-                logger.warning(
-                    "X_intact shouldn't contain missing data but has NaN values. "
-                    "PyPOTS has imputed them with zeros by default to start the training for now. "
-                    "Please double-check your data if you have concerns over this operation."
-                )
-
-            val_set = BaseDataset(val_set, return_labels=False, file_type=file_type)
+            if not check_X_ori_in_val_set(val_set):
+                raise ValueError("val_set must contain 'X_ori' for model validation.")
+            val_set = DatasetForSAITS(
+                val_set, return_X_ori=True, return_labels=False, file_type=file_type
+            )
             val_loader = DataLoader(
                 val_set,
                 batch_size=self.batch_size,
@@ -288,7 +284,7 @@ class SAITS(BaseNNImputer):
         self.model.eval()  # set the model as eval status to freeze it.
 
         # Step 3: save the model if necessary
-        self._auto_save_model_if_necessary(training_finished=True)
+        self._auto_save_model_if_necessary(confirm_saving=True)
 
     def predict(
         self,
@@ -328,7 +324,9 @@ class SAITS(BaseNNImputer):
         """
         # Step 1: wrap the input data with classes Dataset and DataLoader
         self.model.eval()  # set the model as eval status to freeze it.
-        test_set = BaseDataset(test_set, return_labels=False, file_type=file_type)
+        test_set = BaseDataset(
+            test_set, return_X_ori=False, return_labels=False, file_type=file_type
+        )
         test_loader = DataLoader(
             test_set,
             batch_size=self.batch_size,

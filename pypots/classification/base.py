@@ -44,11 +44,12 @@ class BaseClassifier(BaseModel):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
     """
 
@@ -172,11 +173,12 @@ class BaseNNClassifier(BaseNNModel):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
 
     Notes
@@ -278,7 +280,7 @@ class BaseNNClassifier(BaseNNModel):
 
         try:
             training_step = 0
-            for epoch in range(self.epochs):
+            for epoch in range(1, self.epochs + 1):
                 self.model.train()
                 epoch_train_loss_collector = []
                 for idx, data in enumerate(training_loader):
@@ -318,13 +320,15 @@ class BaseNNClassifier(BaseNNModel):
                         self._save_log_into_tb_file(epoch, "validating", val_loss_dict)
 
                     logger.info(
-                        f"Epoch {epoch} - "
+                        f"Epoch {epoch:03d} - "
                         f"training loss: {mean_train_loss:.4f}, "
                         f"validating loss: {mean_val_loss:.4f}"
                     )
                     mean_loss = mean_val_loss
                 else:
-                    logger.info(f"Epoch {epoch} - training loss: {mean_train_loss:.4f}")
+                    logger.info(
+                        f"Epoch {epoch:03d} - training loss: {mean_train_loss:.4f}"
+                    )
                     mean_loss = mean_train_loss
 
                 if np.isnan(mean_loss):
@@ -336,13 +340,14 @@ class BaseNNClassifier(BaseNNModel):
                     self.best_loss = mean_loss
                     self.best_model_dict = self.model.state_dict()
                     self.patience = self.original_patience
-                    # save the model if necessary
-                    self._auto_save_model_if_necessary(
-                        training_finished=False,
-                        saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
-                    )
                 else:
                     self.patience -= 1
+
+                # save the model if necessary
+                self._auto_save_model_if_necessary(
+                    confirm_saving=mean_loss < self.best_loss,
+                    saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
+                )
 
                 if os.getenv("enable_tuning", False):
                     nni.report_intermediate_result(mean_loss)
@@ -356,7 +361,7 @@ class BaseNNClassifier(BaseNNModel):
                     break
 
         except Exception as e:
-            logger.error(f"Exception: {e}")
+            logger.error(f"❌ Exception: {e}")
             if self.best_model_dict is None:
                 raise RuntimeError(
                     "Training got interrupted. Model was not trained. Please investigate the error printed above."

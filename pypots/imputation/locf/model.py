@@ -9,6 +9,7 @@ The implementation of LOCF (Last Observed Carried Forward) for the partially-obs
 import warnings
 from typing import Union, Optional
 
+import h5py
 import numpy as np
 import torch
 
@@ -26,24 +27,26 @@ class LOCF(BaseImputer):
         With LOCF, the observed values are carried forward to impute the missing ones. But if the first value
         is missing, there is no value to carry forward. This parameter is used to determine the strategy to
         impute the missing values at the beginning of the time-series sequence after LOCF is applied.
-        It can be one of ['backward', 'zero', 'mean', 'nan'].
+        It can be one of ['backward', 'zero', 'median', 'nan'].
         If 'nan', the missing values at the sequence beginning will be left as NaNs.
         If 'zero', the missing values at the sequence beginning will be imputed with 0.
         If 'backward', the missing values at the beginning of the time-series sequence will be imputed with the
         first observed value in the sequence, i.e. the first observed value will be carried backward to impute
-        the missing values at the beginning of the sequence.
-        If 'mean', the missing values at the sequence beginning will be imputed with the overall mean
-        values of features in the dataset.
+        the missing values at the beginning of the sequence. This method is also known as NOCB (Next Observation
+        Carried Backward). If 'median', the missing values at the sequence beginning will be imputed with the overall
+        median values of features in the dataset.
+        If `first_step_imputation` is not "nan", if missing values still exist (this is usually caused by whole feature
+        missing) after applying `first_step_imputation`, they will be filled with 0.
 
     """
 
     def __init__(
         self,
-        first_step_imputation: str = "backward",
+        first_step_imputation: str = "zero",
         device: Optional[Union[str, torch.device, list]] = None,
     ):
         super().__init__(device=device)
-        assert first_step_imputation in ["nan", "zero", "backward", "mean"]
+        assert first_step_imputation in ["nan", "zero", "backward", "median"]
         self.first_step_imputation = first_step_imputation
 
     def fit(
@@ -62,12 +65,13 @@ class LOCF(BaseImputer):
         """
         warnings.warn(
             "LOCF (Last Observed Carried Forward) imputation class has no parameter to train. "
-            "Please run func impute(X) directly."
+            "Please run func `predict()` directly."
         )
 
     def _locf_numpy(
         self,
         X: np.ndarray,
+        first_step_imputation: str = "backward",
     ) -> np.ndarray:
         """Numpy implementation of LOCF.
 
@@ -101,29 +105,34 @@ class LOCF(BaseImputer):
 
         # If there are values still missing, they are missing at the beginning of the time-series sequence.
         if np.isnan(X_imputed).any():
-            if self.first_step_imputation == "nan":
+            if first_step_imputation == "nan":
                 pass
-            elif self.first_step_imputation == "zero":
+            elif first_step_imputation == "zero":
                 X_imputed = np.nan_to_num(X_imputed, nan=0)
-            elif self.first_step_imputation == "backward":
-                X_imputed_transpose = np.copy(X_imputed)
+            elif first_step_imputation == "backward":
                 # imputed by last observation carried backward (LOCB)
+                X_imputed_transpose = np.copy(X_imputed)
                 X_imputed_transpose = np.flip(X_imputed_transpose, axis=1)
-                X_LOCB = self._locf_numpy(X_imputed_transpose)
-                assert not np.isnan(X_LOCB).any(), "NaN still exists in X_LOCB"
+                X_LOCB = self._locf_numpy(
+                    X_imputed_transpose,
+                    "zero",
+                )
                 X_imputed = np.flip(X_LOCB, axis=1)
-            elif self.first_step_imputation == "mean":
+            elif first_step_imputation == "median":
                 bz, n_steps, n_features = X_imputed.shape
-                X_imputed_squeezed = np.copy(X_imputed).reshape(-1, n_features)
-                mean_values = np.nanmean(X_imputed_squeezed, axis=0)
-                for i, v in enumerate(mean_values):
+                X_imputed_reshaped = np.copy(X_imputed).reshape(-1, n_features)
+                median_values = np.nanmedian(X_imputed_reshaped, axis=0)
+                for i, v in enumerate(median_values):
                     X_imputed[:, :, i] = np.nan_to_num(X_imputed[:, :, i], nan=v)
+                if np.isnan(X_imputed).any() and self.keep_trying:
+                    X_imputed = np.nan_to_num(X_imputed, nan=0)
 
         return X_imputed
 
     def _locf_torch(
         self,
         X: torch.Tensor,
+        first_step_imputation: str = "backward",
     ) -> torch.Tensor:
         """Torch implementation of LOCF.
 
@@ -151,23 +160,27 @@ class LOCF(BaseImputer):
 
         # If there are values still missing, they are missing at the beginning of the time-series sequence.
         if torch.isnan(X_imputed).any():
-            if self.first_step_imputation == "nan":
+            if first_step_imputation == "nan":
                 pass
-            elif self.first_step_imputation == "zero":
+            elif first_step_imputation == "zero":
                 X_imputed = torch.nan_to_num(X_imputed, nan=0)
-            elif self.first_step_imputation == "backward":
-                X_imputed_transpose = X_imputed.clone()
+            elif first_step_imputation == "backward":
                 # imputed by last observation carried backward (LOCB)
+                X_imputed_transpose = X_imputed.clone()
                 X_imputed_transpose = torch.flip(X_imputed_transpose, dims=[1])
-                X_LOCB = self._locf_torch(X_imputed_transpose)
-                assert not torch.isnan(X_LOCB).any(), "NaN still exists in X_LOCB"
+                X_LOCB = self._locf_torch(
+                    X_imputed_transpose,
+                    "zero",
+                )
                 X_imputed = torch.flip(X_LOCB, dims=[1])
-            elif self.first_step_imputation == "mean":
+            elif first_step_imputation == "median":
                 bz, n_steps, n_features = X_imputed.shape
-                X_imputed_squeezed = X_imputed.clone().reshape(-1, n_features)
-                mean_values = torch.nanmean(X_imputed_squeezed, dim=0)
-                for i, v in enumerate(mean_values):
+                X_imputed_reshaped = X_imputed.clone().reshape(-1, n_features)
+                median_values = torch.nanmedian(X_imputed_reshaped, dim=0)
+                for i, v in enumerate(median_values.values):
                     X_imputed[:, :, i] = torch.nan_to_num(X_imputed[:, :, i], nan=v)
+                if torch.isnan(X_imputed).any() and self.keep_trying:
+                    X_imputed = torch.nan_to_num(X_imputed, nan=0)
 
         return X_imputed
 
@@ -199,8 +212,11 @@ class LOCF(BaseImputer):
             It should be a dictionary including keys as 'imputation', 'classification', 'clustering', and 'forecasting'.
             For sure, only the keys that relevant tasks are supported by the model will be returned.
         """
-        assert not isinstance(test_set, str)
-        X = test_set["X"]
+        if isinstance(test_set, str):
+            with h5py.File(test_set, "r") as f:
+                X = f["X"][:]
+        else:
+            X = test_set["X"]
 
         assert len(X.shape) == 3, (
             f"Input X should have 3 dimensions [n_samples, n_steps, n_features], "
@@ -210,9 +226,9 @@ class LOCF(BaseImputer):
             X = np.asarray(X)
 
         if isinstance(X, np.ndarray):
-            imputed_data = self._locf_numpy(X)
+            imputed_data = self._locf_numpy(X, self.first_step_imputation)
         elif isinstance(X, torch.Tensor):
-            imputed_data = self._locf_torch(X)
+            imputed_data = self._locf_torch(X, self.first_step_imputation)
         else:
             raise TypeError(
                 "X must be type of list/np.ndarray/torch.Tensor, " f"but got {type(X)}"

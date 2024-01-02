@@ -16,7 +16,6 @@ Partial implementation uses code from the official implementation https://github
 import os
 from typing import Union, Optional
 
-import h5py
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -26,9 +25,10 @@ try:
 except ImportError:
     pass
 
-from .data import DatasetForCSDI
+from .data import DatasetForCSDI, TestDatasetForCSDI
 from .modules import _CSDI
 from ..base import BaseNNImputer
+from ...data.checking import check_X_ori_in_val_set
 from ...optim.adam import Adam
 from ...optim.base import Optimizer
 from ...utils.logging import logger
@@ -110,11 +110,12 @@ class CSDI(BaseNNImputer):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
     References
     ----------
@@ -160,6 +161,7 @@ class CSDI(BaseNNImputer):
         )
         assert target_strategy in ["mix", "random"]
         assert schedule in ["quad", "linear"]
+        self.target_strategy = target_strategy
 
         # set up the model
         self.model = _CSDI(
@@ -171,7 +173,6 @@ class CSDI(BaseNNImputer):
             d_feature_embedding,
             d_diffusion_embedding,
             is_unconditional,
-            target_strategy,
             n_diffusion_steps,
             schedule,
             beta_start,
@@ -187,21 +188,17 @@ class CSDI(BaseNNImputer):
     def _assemble_input_for_training(self, data: list) -> dict:
         (
             indices,
-            observed_data,
-            observed_mask,
+            X_ori,
+            indicating_mask,
+            cond_mask,
             observed_tp,
-            gt_mask,
-            for_pattern_mask,
-            cut_length,
         ) = self._send_data_to_given_device(data)
 
         inputs = {
-            "observed_data": observed_data.permute(0, 2, 1),
-            "observed_mask": observed_mask.permute(0, 2, 1),
+            "X_ori": X_ori.permute(0, 2, 1),  # ori observed part for model hint
+            "indicating_mask": indicating_mask.permute(0, 2, 1),  # for loss calc
+            "cond_mask": cond_mask.permute(0, 2, 1),  # for masking X_ori
             "observed_tp": observed_tp,
-            "gt_mask": gt_mask.permute(0, 2, 1),
-            "for_pattern_mask": for_pattern_mask,
-            "cut_length": cut_length,
         }
         return inputs
 
@@ -209,7 +206,19 @@ class CSDI(BaseNNImputer):
         return self._assemble_input_for_training(data)
 
     def _assemble_input_for_testing(self, data) -> dict:
-        return self._assemble_input_for_validating(data)
+        (
+            indices,
+            X,
+            cond_mask,
+            observed_tp,
+        ) = self._send_data_to_given_device(data)
+
+        inputs = {
+            "X": X.permute(0, 2, 1),  # for model input
+            "cond_mask": cond_mask.permute(0, 2, 1),  # missing mask
+            "observed_tp": observed_tp,
+        }
+        return inputs
 
     def _train_model(
         self,
@@ -222,7 +231,7 @@ class CSDI(BaseNNImputer):
 
         try:
             training_step = 0
-            for epoch in range(self.epochs):
+            for epoch in range(1, self.epochs + 1):
                 self.model.train()
                 epoch_train_loss_collector = []
                 for idx, data in enumerate(training_loader):
@@ -251,25 +260,27 @@ class CSDI(BaseNNImputer):
                             results = self.model.forward(
                                 inputs, training=False, n_sampling_times=0
                             )
-                            val_loss_collector.append(results["loss"].item())
+                            val_loss_collector.append(results["loss"].sum().item())
 
                     mean_val_loss = np.asarray(val_loss_collector).mean()
 
                     # save validating loss logs into the tensorboard file for every epoch if in need
                     if self.summary_writer is not None:
                         val_loss_dict = {
-                            "imputation_loss": mean_val_loss,
+                            "validating_loss": mean_val_loss,
                         }
                         self._save_log_into_tb_file(epoch, "validating", val_loss_dict)
 
                     logger.info(
-                        f"Epoch {epoch} - "
+                        f"Epoch {epoch:03d} - "
                         f"training loss: {mean_train_loss:.4f}, "
                         f"validating loss: {mean_val_loss:.4f}"
                     )
                     mean_loss = mean_val_loss
                 else:
-                    logger.info(f"Epoch {epoch} - training loss: {mean_train_loss:.4f}")
+                    logger.info(
+                        f"Epoch {epoch:03d} - training loss: {mean_train_loss:.4f}"
+                    )
                     mean_loss = mean_train_loss
 
                 if np.isnan(mean_loss):
@@ -281,13 +292,14 @@ class CSDI(BaseNNImputer):
                     self.best_loss = mean_loss
                     self.best_model_dict = self.model.state_dict()
                     self.patience = self.original_patience
-                    # save the model if necessary
-                    self._auto_save_model_if_necessary(
-                        training_finished=False,
-                        saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
-                    )
                 else:
                     self.patience -= 1
+
+                # save the model if necessary
+                self._auto_save_model_if_necessary(
+                    confirm_saving=mean_loss < self.best_loss,
+                    saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
+                )
 
                 if os.getenv("enable_tuning", False):
                     nni.report_intermediate_result(mean_loss)
@@ -301,7 +313,7 @@ class CSDI(BaseNNImputer):
                     break
 
         except Exception as e:
-            logger.error(f"Exception: {e}")
+            logger.error(f"❌ Exception: {e}")
             if self.best_model_dict is None:
                 raise RuntimeError(
                     "Training got interrupted. Model was not trained. Please investigate the error printed above."
@@ -327,7 +339,11 @@ class CSDI(BaseNNImputer):
     ) -> None:
         # Step 1: wrap the input data with classes Dataset and DataLoader
         training_set = DatasetForCSDI(
-            train_set, return_labels=False, file_type=file_type
+            train_set,
+            self.target_strategy,
+            return_X_ori=False,
+            return_labels=False,
+            file_type=file_type,
         )
         training_loader = DataLoader(
             training_set,
@@ -337,30 +353,15 @@ class CSDI(BaseNNImputer):
         )
         val_loader = None
         if val_set is not None:
-            if isinstance(val_set, str):
-                with h5py.File(val_set, "r") as hf:
-                    # Here we read the whole validation set from the file to mask a portion for validation.
-                    # In PyPOTS, using a file usually because the data is too big. However, the validation set is
-                    # generally shouldn't be too large. For example, we have 1 billion samples for model training.
-                    # We won't take 20% of them as the validation set because we want as much as possible data for the
-                    # training stage to enhance the model's generalization ability. Therefore, 100,000 representative
-                    # samples will be enough to validate the model.
-                    val_set = {
-                        "X": hf["X"][:],
-                        "X_intact": hf["X_intact"][:],
-                        "indicating_mask": hf["indicating_mask"][:],
-                    }
-
-            # check if X_intact contains missing values
-            if np.isnan(val_set["X_intact"]).any():
-                val_set["X_intact"] = np.nan_to_num(val_set["X_intact"], nan=0)
-                logger.warning(
-                    "X_intact shouldn't contain missing data but has NaN values. "
-                    "PyPOTS has imputed them with zeros by default to start the training for now. "
-                    "Please double-check your data if you have concerns over this operation."
-                )
-
-            val_set = DatasetForCSDI(val_set, return_labels=False, file_type=file_type)
+            if not check_X_ori_in_val_set(val_set):
+                raise ValueError("val_set must contain 'X_ori' for model validation.")
+            val_set = DatasetForCSDI(
+                val_set,
+                self.target_strategy,
+                return_X_ori=True,
+                return_labels=False,
+                file_type=file_type,
+            )
             val_loader = DataLoader(
                 val_set,
                 batch_size=self.batch_size,
@@ -374,7 +375,7 @@ class CSDI(BaseNNImputer):
         self.model.eval()  # set the model as eval status to freeze it.
 
         # Step 3: save the model if necessary
-        self._auto_save_model_if_necessary(training_finished=True)
+        self._auto_save_model_if_necessary(confirm_saving=True)
 
     def predict(
         self,
@@ -408,9 +409,13 @@ class CSDI(BaseNNImputer):
             It should be a dictionary including a key named 'imputation'.
 
         """
+        assert n_sampling_times > 0, "n_sampling_times should be greater than 0."
+
         # Step 1: wrap the input data with classes Dataset and DataLoader
         self.model.eval()  # set the model as eval status to freeze it.
-        test_set = DatasetForCSDI(test_set, return_labels=False, file_type=file_type)
+        test_set = TestDatasetForCSDI(
+            test_set, return_X_ori=False, return_labels=False, file_type=file_type
+        )
         test_loader = DataLoader(
             test_set,
             batch_size=self.batch_size,

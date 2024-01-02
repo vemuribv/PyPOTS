@@ -73,11 +73,12 @@ class GRUD(BaseNNClassifier):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
     References
     ----------
@@ -133,7 +134,7 @@ class GRUD(BaseNNClassifier):
         self.optimizer = optimizer
         self.optimizer.init_optimizer(self.model.parameters())
 
-    def _assemble_input_for_training(self, data: dict) -> dict:
+    def _assemble_input_for_training(self, data: list) -> dict:
         # fetch data
         (
             indices,
@@ -157,10 +158,10 @@ class GRUD(BaseNNClassifier):
         }
         return inputs
 
-    def _assemble_input_for_validating(self, data: dict) -> dict:
+    def _assemble_input_for_validating(self, data: list) -> dict:
         return self._assemble_input_for_training(data)
 
-    def _assemble_input_for_testing(self, data: dict) -> dict:
+    def _assemble_input_for_testing(self, data: list) -> dict:
         (
             indices,
             X,
@@ -211,7 +212,7 @@ class GRUD(BaseNNClassifier):
         self.model.eval()  # set the model as eval status to freeze it.
 
         # Step 3: save the model if necessary
-        self._auto_save_model_if_necessary(training_finished=True)
+        self._auto_save_model_if_necessary(confirm_saving=True)
 
     def predict(
         self,

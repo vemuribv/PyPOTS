@@ -12,7 +12,6 @@ Generative Semi-supervised Learning for Multivariate Time Series Imputation. AAA
 import os
 from typing import Union, Optional
 
-import h5py
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -20,9 +19,11 @@ from torch.utils.data import DataLoader
 from .data import DatasetForUSGAN
 from .modules import _USGAN
 from ..base import BaseNNImputer
+from ...data.checking import check_X_ori_in_val_set
 from ...optim.adam import Adam
 from ...optim.base import Optimizer
 from ...utils.logging import logger
+from ...utils.metrics import calc_mse
 
 try:
     import nni
@@ -50,7 +51,7 @@ class USGAN(BaseNNImputer):
     hint_rate : float
         The hint rate for the discriminator
 
-    dropout_rate : float
+    dropout : float
         The dropout rate for the last layer in Discriminator
 
     G_steps : int
@@ -117,7 +118,7 @@ class USGAN(BaseNNImputer):
         rnn_hidden_size: int,
         lambda_mse: float = 1,
         hint_rate: float = 0.7,
-        dropout_rate: float = 0.0,
+        dropout: float = 0.0,
         G_steps: int = 1,
         D_steps: int = 1,
         batch_size: int = 32,
@@ -153,7 +154,7 @@ class USGAN(BaseNNImputer):
             rnn_hidden_size,
             lambda_mse,
             hint_rate,
-            dropout_rate,
+            dropout,
             self.device,
         )
         self._send_model_to_given_device()
@@ -195,10 +196,40 @@ class USGAN(BaseNNImputer):
         return inputs
 
     def _assemble_input_for_validating(self, data: list) -> dict:
-        return self._assemble_input_for_training(data)
+        # fetch data
+        (
+            indices,
+            X,
+            missing_mask,
+            deltas,
+            back_X,
+            back_missing_mask,
+            back_deltas,
+            X_ori,
+            indicating_mask,
+        ) = self._send_data_to_given_device(data)
+
+        # assemble input data
+        inputs = {
+            "indices": indices,
+            "forward": {
+                "X": X,
+                "missing_mask": missing_mask,
+                "deltas": deltas,
+            },
+            "backward": {
+                "X": back_X,
+                "missing_mask": back_missing_mask,
+                "deltas": back_deltas,
+            },
+            "X_ori": X_ori,
+            "indicating_mask": indicating_mask,
+        }
+
+        return inputs
 
     def _assemble_input_for_testing(self, data: list) -> dict:
-        return self._assemble_input_for_validating(data)
+        return self._assemble_input_for_training(data)
 
     def _train_model(
         self,
@@ -213,7 +244,7 @@ class USGAN(BaseNNImputer):
             training_step = 0
             epoch_train_loss_G_collector = []
             epoch_train_loss_D_collector = []
-            for epoch in range(self.epochs):
+            for epoch in range(1, self.epochs + 1):
                 self.model.train()
                 for idx, data in enumerate(training_loader):
                     training_step += 1
@@ -266,31 +297,40 @@ class USGAN(BaseNNImputer):
 
                 if val_loader is not None:
                     self.model.eval()
-                    epoch_val_loss_G_collector = []
+                    imputation_loss_collector = []
                     with torch.no_grad():
                         for idx, data in enumerate(val_loader):
                             inputs = self._assemble_input_for_validating(data)
-                            results = self.model.forward(inputs, training=True)
-                            epoch_val_loss_G_collector.append(
-                                results["generation_loss"].sum().item()
+                            results = self.model.forward(inputs, training=False)
+                            imputation_mse = (
+                                calc_mse(
+                                    results["imputed_data"],
+                                    inputs["X_ori"],
+                                    inputs["indicating_mask"],
+                                )
+                                .sum()
+                                .detach()
+                                .item()
                             )
-                    mean_val_G_loss = np.mean(epoch_val_loss_G_collector)
+                            imputation_loss_collector.append(imputation_mse)
+
+                    mean_val_loss = np.mean(imputation_loss_collector)
                     # save validating loss logs into the tensorboard file for every epoch if in need
                     if self.summary_writer is not None:
                         val_loss_dict = {
-                            "generation_loss": mean_val_G_loss,
+                            "validating_loss": mean_val_loss,
                         }
                         self._save_log_into_tb_file(epoch, "validating", val_loss_dict)
                     logger.info(
-                        f"Epoch {epoch} - "
+                        f"Epoch {epoch:03d} - "
                         f"generator training loss: {mean_epoch_train_G_loss:.4f}, "
                         f"discriminator training loss: {mean_epoch_train_D_loss:.4f}, "
-                        f"generator validating loss: {mean_val_G_loss:.4f}"
+                        f"validating loss: {mean_val_loss:.4f}"
                     )
-                    mean_loss = mean_val_G_loss
+                    mean_loss = mean_val_loss
                 else:
                     logger.info(
-                        f"Epoch {epoch} - "
+                        f"Epoch {epoch:03d} - "
                         f"generator training loss: {mean_epoch_train_G_loss:.4f}, "
                         f"discriminator training loss: {mean_epoch_train_D_loss:.4f}"
                     )
@@ -305,13 +345,14 @@ class USGAN(BaseNNImputer):
                     self.best_loss = mean_loss
                     self.best_model_dict = self.model.state_dict()
                     self.patience = self.original_patience
-                    # save the model if necessary
-                    self._auto_save_model_if_necessary(
-                        training_finished=False,
-                        saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
-                    )
                 else:
                     self.patience -= 1
+
+                # save the model if necessary
+                self._auto_save_model_if_necessary(
+                    confirm_saving=mean_loss < self.best_loss,
+                    saving_name=f"{self.__class__.__name__}_epoch{epoch}_loss{mean_loss}",
+                )
 
                 if os.getenv("enable_tuning", False):
                     nni.report_intermediate_result(mean_loss)
@@ -325,7 +366,7 @@ class USGAN(BaseNNImputer):
                     break
 
         except Exception as e:
-            logger.error(f"Exception: {e}")
+            logger.error(f"❌ Exception: {e}")
             if self.best_model_dict is None:
                 raise RuntimeError(
                     "Training got interrupted. Model was not trained. Please investigate the error printed above."
@@ -350,7 +391,7 @@ class USGAN(BaseNNImputer):
     ) -> None:
         # Step 1: wrap the input data with classes Dataset and DataLoader
         training_set = DatasetForUSGAN(
-            train_set, return_labels=False, file_type=file_type
+            train_set, return_X_ori=False, return_labels=False, file_type=file_type
         )
         training_loader = DataLoader(
             training_set,
@@ -360,30 +401,11 @@ class USGAN(BaseNNImputer):
         )
         val_loader = None
         if val_set is not None:
-            if isinstance(val_set, str):
-                with h5py.File(val_set, "r") as hf:
-                    # Here we read the whole validation set from the file to mask a portion for validation.
-                    # In PyPOTS, using a file usually because the data is too big. However, the validation set is
-                    # generally shouldn't be too large. For example, we have 1 billion samples for model training.
-                    # We won't take 20% of them as the validation set because we want as much as possible data for the
-                    # training stage to enhance the model's generalization ability. Therefore, 100,000 representative
-                    # samples will be enough to validate the model.
-                    val_set = {
-                        "X": hf["X"][:],
-                        "X_intact": hf["X_intact"][:],
-                        "indicating_mask": hf["indicating_mask"][:],
-                    }
-
-            # check if X_intact contains missing values
-            if np.isnan(val_set["X_intact"]).any():
-                val_set["X_intact"] = np.nan_to_num(val_set["X_intact"], nan=0)
-                logger.warning(
-                    "X_intact shouldn't contain missing data but has NaN values. "
-                    "PyPOTS has imputed them with zeros by default to start the training for now. "
-                    "Please double-check your data if you have concerns over this operation."
-                )
-
-            val_set = DatasetForUSGAN(val_set, return_labels=False, file_type=file_type)
+            if not check_X_ori_in_val_set(val_set):
+                raise ValueError("val_set must contain 'X_ori' for model validation.")
+            val_set = DatasetForUSGAN(
+                val_set, return_X_ori=True, return_labels=False, file_type=file_type
+            )
             val_loader = DataLoader(
                 val_set,
                 batch_size=self.batch_size,
@@ -397,7 +419,7 @@ class USGAN(BaseNNImputer):
         self.model.eval()  # set the model as eval status to freeze it.
 
         # Step 3: save the model if necessary
-        self._auto_save_model_if_necessary(training_finished=True)
+        self._auto_save_model_if_necessary(confirm_saving=True)
 
     def predict(
         self,
@@ -405,7 +427,9 @@ class USGAN(BaseNNImputer):
         file_type="h5py",
     ) -> dict:
         self.model.eval()  # set the model as eval status to freeze it.
-        test_set = DatasetForUSGAN(test_set, return_labels=False, file_type=file_type)
+        test_set = DatasetForUSGAN(
+            test_set, return_X_ori=False, return_labels=False, file_type=file_type
+        )
         test_loader = DataLoader(
             test_set,
             batch_size=self.batch_size,

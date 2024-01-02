@@ -36,11 +36,12 @@ class BaseModel(ABC):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
     Attributes
     ----------
@@ -64,7 +65,7 @@ class BaseModel(ABC):
         saving_path: str = None,
         model_saving_strategy: Optional[str] = "best",
     ):
-        saving_strategies = [None, "best", "better"]
+        saving_strategies = [None, "best", "better", "all"]
         assert (
             model_saving_strategy in saving_strategies
         ), f"saving_strategy must be one of {saving_strategies}, but got f{model_saving_strategy}."
@@ -132,6 +133,8 @@ class BaseModel(ABC):
                     f"device should be str/torch.device/a list containing str or torch.device, but got {type(device)}"
                 )
 
+            logger.info(f"Using the given device: {self.device}")
+
         # check CUDA availability if using CUDA
         if (isinstance(self.device, list) and "cuda" in self.device[0].type) or (
             isinstance(self.device, torch.device) and "cuda" in self.device.type
@@ -141,6 +144,13 @@ class BaseModel(ABC):
             ), "You are trying to use CUDA for model training, but CUDA is not available in your environment."
 
     def _setup_path(self, saving_path) -> None:
+        MODEL_NO_NEED_TO_SAVE = [
+            "LOCF",
+        ]
+        # if the model is no need to save (e.g. LOCF), then skip the following steps
+        if self.__class__.__name__ in MODEL_NO_NEED_TO_SAVE:
+            return
+
         if isinstance(saving_path, str):
             # get the current time to append to saving_path,
             # so you can use the same saving_path to run multiple times
@@ -160,7 +170,7 @@ class BaseModel(ABC):
             logger.info(f"Tensorboard file will be saved to {tb_saving_path}")
         else:
             logger.warning(
-                "saving_path not given. Model files and tensorboard file will not be saved."
+                "‼️ saving_path not given. Model files and tensorboard file will not be saved."
             )
 
     def _send_model_to_given_device(self) -> None:
@@ -211,28 +221,30 @@ class BaseModel(ABC):
 
     def _auto_save_model_if_necessary(
         self,
-        training_finished: bool = True,
+        confirm_saving: bool = True,
         saving_name: str = None,
     ) -> None:
         """Automatically save the current model into a file if in need.
 
         Parameters
         ----------
-        training_finished :
-            Whether the training is already finished when invoke this function.
-            The saving_strategy "better" only works when training_finished is False.
-            The saving_strategy "best" only works when training_finished is True.
+        confirm_saving :
+            One more condition to confirm saving the model.
 
         saving_name :
             The file name of the saved model.
 
         """
         if self.saving_path is not None and self.model_saving_strategy is not None:
+            # construct the saving path
             name = self.__class__.__name__ if saving_name is None else saving_name
             saving_path = os.path.join(self.saving_path, name)
-            if not training_finished and self.model_saving_strategy == "better":
+
+            if self.model_saving_strategy == "all":
                 self.save(saving_path)
-            elif training_finished and self.model_saving_strategy == "best":
+            elif self.model_saving_strategy == "better" and confirm_saving:
+                self.save(saving_path)
+            elif self.model_saving_strategy == "best" and confirm_saving:
                 self.save(saving_path)
             else:
                 pass
@@ -268,10 +280,10 @@ class BaseModel(ABC):
         if os.path.exists(saving_path):
             if overwrite:
                 logger.warning(
-                    f"File {saving_path} exists. Argument `overwrite` is True. Overwriting now..."
+                    f"‼️ File {saving_path} exists. Argument `overwrite` is True. Overwriting now..."
                 )
             else:
-                logger.error(f"File {saving_path} exists. Saving operation aborted.")
+                logger.error(f"❌ File {saving_path} exists. Saving operation aborted.")
 
         try:
             create_dir_if_not_exist(saving_dir)
@@ -280,7 +292,7 @@ class BaseModel(ABC):
                 torch.save(self.model.module, saving_path)
             else:
                 torch.save(self.model, saving_path)
-            logger.info(f"Saved the model to {saving_path}.")
+            logger.info(f"Saved the model to {saving_path}")
         except Exception as e:
             raise RuntimeError(
                 f'Failed to save the model to "{saving_path}" because of the below error! \n{e}'
@@ -316,7 +328,7 @@ class BaseModel(ABC):
                 self.model = loaded_model.model
         except Exception as e:
             raise e
-        logger.info(f"Model loaded successfully from {path}.")
+        logger.info(f"Model loaded successfully from {path}")
 
     def save_model(
         self,
@@ -468,11 +480,12 @@ class BaseNNModel(BaseModel):
         training into a tensorboard file). Will not save if not given.
 
     model_saving_strategy :
-        The strategy to save model checkpoints. It has to be one of [None, "best", "better"].
+        The strategy to save model checkpoints. It has to be one of [None, "best", "better", "all"].
         No model will be saved when it is set as None.
         The "best" strategy will only automatically save the best model after the training finished.
         The "better" strategy will automatically save the model during training whenever the model performs
         better than in previous epochs.
+        The "all" strategy will save every model after each epoch training.
 
 
     Attributes
@@ -536,7 +549,8 @@ class BaseNNModel(BaseModel):
         """Print the number of trainable parameters in the initialized NN model."""
         num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         logger.info(
-            f"Model initialized successfully with the number of trainable parameters: {num_params:,}"
+            f"{self.__class__.__name__} initialized with the given hyperparameters, "
+            f"the number of trainable parameters: {num_params:,}"
         )
 
     @abstractmethod

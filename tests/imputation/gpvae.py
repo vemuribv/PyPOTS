@@ -15,18 +15,19 @@ import pytest
 from pypots.imputation import GPVAE
 from pypots.optim import Adam
 from pypots.utils.logging import logger
-from pypots.utils.metrics import calc_mae
+from pypots.utils.metrics import calc_mse
 from tests.global_test_config import (
     DATA,
+    EPOCHS,
     DEVICE,
-    check_tb_and_model_checkpoints_existence,
-)
-from tests.imputation.config import (
     TRAIN_SET,
     VAL_SET,
     TEST_SET,
+    H5_TRAIN_SET_PATH,
+    H5_VAL_SET_PATH,
+    H5_TEST_SET_PATH,
     RESULT_SAVING_DIR_FOR_IMPUTATION,
-    EPOCHS,
+    check_tb_and_model_checkpoints_existence,
 )
 
 
@@ -57,14 +58,15 @@ class TestGPVAE(unittest.TestCase):
 
     @pytest.mark.xdist_group(name="imputation-gpvae")
     def test_1_impute(self):
-        imputed_X = self.gp_vae.impute(TEST_SET)
+        imputed_X = self.gp_vae.predict(TEST_SET, n_sampling_times=2)["imputation"]
+        imputed_X = imputed_X.mean(axis=1)
         assert not np.isnan(
             imputed_X
         ).any(), "Output still has missing values after running impute()."
-        test_MAE = calc_mae(
-            imputed_X, DATA["test_X_intact"], DATA["test_X_indicating_mask"]
+        test_MSE = calc_mse(
+            imputed_X, DATA["test_X_ori"], DATA["test_X_indicating_mask"]
         )
-        logger.info(f"GP-VAE test_MAE: {test_MAE}")
+        logger.info(f"GP-VAE test_MSE: {test_MSE}")
 
     @pytest.mark.xdist_group(name="imputation-gpvae")
     def test_2_parameters(self):
@@ -96,6 +98,24 @@ class TestGPVAE(unittest.TestCase):
 
         # test loading the saved model, not necessary, but need to test
         self.gp_vae.load(saved_model_path)
+
+    @pytest.mark.xdist_group(name="imputation-gpvae")
+    def test_4_lazy_loading(self):
+        self.gp_vae.fit(H5_TRAIN_SET_PATH, H5_VAL_SET_PATH)
+        imputed_X = self.gp_vae.predict(H5_TEST_SET_PATH, n_sampling_times=2)[
+            "imputation"
+        ]
+        imputed_X = imputed_X.mean(axis=1)
+        assert not np.isnan(
+            imputed_X
+        ).any(), "Output still has missing values after running impute()."
+
+        test_MSE = calc_mse(
+            imputed_X,
+            DATA["test_X_ori"],
+            DATA["test_X_indicating_mask"],
+        )
+        logger.info(f"Lazy-loading GP-VAE test_MSE: {test_MSE}")
 
 
 if __name__ == "__main__":
