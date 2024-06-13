@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 import scipy.stats as st
 
+import numpy as np #again
+
 
 def get_cluster_members(
     test_data: np.ndarray, class_predictions: np.ndarray
