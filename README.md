@@ -2,7 +2,7 @@
     <img src="https://pypots.com/figs/pypots_logos/PyPOTS_logo_FFBG.svg?sanitize=true" width="200" align="right">
 </a>
 
-<h2 align="center">Welcome to PyPOTS</h2>
+<h2 align="center">Welcome to Updated Test Git VSCODE PyPOTS</h2>
 
 <p align="center"><i>a Python toolbox for machine learning on Partially-Observed Time Series</i></p>
 
