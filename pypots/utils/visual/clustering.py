@@ -276,3 +276,89 @@ def plot_cluster_means(cluster_means: Dict[int, dict]) -> None:
         plt.gca().add_artist(new_lgd)
 
         plt.show()
+
+# TESTING BELOW
+
+# goal: one plot per var, showing all time series colored by cluster assignment
+def plot_clusters_composite(dict_to_plot: Dict[int, dict],
+                            cluster_means: Dict[int, dict],
+                            gray=True) -> None:
+    """
+    TO DO: fill this in
+    """
+    colors = plt.rcParams["axes.prop_cycle"].by_key()[
+        "color"
+    ]  # to keep cluster colors consistent
+
+    for var in dict_to_plot[0]: # iterate vars (all clusters should have same vars, so using [0])
+        plt.figure(figsize=(16, 8))
+
+        # ALL TIME SERIES IN GRAY
+        for clust in dict_to_plot: # iterate cluters
+            
+            y = dict_to_plot[clust][var] # list of time series 
+
+            for y_values in y:  # iterate members
+                x = np.arange(len(y_values))
+
+                series1 = np.array(y_values).astype(np.double)
+                s1mask = np.isfinite(
+                    series1
+                )  # connects all points (if >1) in line plot even if some intermediate are missing
+                
+                if gray: 
+                    plt.plot(x[s1mask], series1[s1mask], "-",
+                            color='gray',
+                            alpha=0.1
+                    )
+                else:
+                    plt.plot(x[s1mask], series1[s1mask], "-",
+                            color=colors[clust],
+                            alpha=0.1
+                    )
+            
+        # MEAN OF CLUSTERS IN COLOR
+        y = cluster_means[var]
+        for clust in y: # iterate cluters
+            for val in y[clust]:  # iterate calculation (mean, CI_low, CI_high)
+                if val == "mean":
+                    x = np.arange(len(y[clust][val]))
+                    series1 = np.array(y[clust][val]).astype(np.double)
+                    s1mask = np.isfinite(series1)
+                    plt.plot(
+                        x[s1mask],
+                        series1[s1mask],
+                        ".-",  # mean as solid line
+                        color=colors[clust],
+                        label="Cluster %i mean (n = %d)"
+                        % (
+                            clust,
+                            y[clust]["n"],
+                        ),  # legend will include cluster size
+                    )
+
+                if val in ("CI_low", "CI_high"):
+                    x = np.arange(len(y[clust][val]))
+                    series1 = np.array(y[clust][val]).astype(np.double)
+                    s1mask = np.isfinite(series1)
+                    plt.plot(
+                        x[s1mask],
+                        series1[s1mask],
+                        "--",  # CI bounds as dashed lines
+                        color=colors[clust],
+                    )
+
+        plt.title("Var %i" % var)
+        plt.xticks(x)
+        
+        # add dashed line label to legend
+        line_dashed = mlines.Line2D(
+            [], [], color="gray", linestyle="--", linewidth=1.5, label="95% CI"
+        )
+        handles, labels = plt.legend().axes.get_legend_handles_labels()
+        handles.append(line_dashed)
+        new_lgd = plt.legend(handles=handles)
+        plt.gca().add_artist(new_lgd)
+
+        plt.show()
+
