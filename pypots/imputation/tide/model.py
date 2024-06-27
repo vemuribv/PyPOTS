@@ -23,7 +23,7 @@ from ...optim.base import Optimizer
 
 class TiDE(BaseNNImputer):
     """The PyTorch implementation of the TiDE model.
-    TiDE is originally proposed by Wu et al. in :cite:`wu2021TiDE`.
+    TiDE is originally proposed by Das et al. in :cite:`das2023tide`.
 
     Parameters
     ----------
@@ -39,17 +39,14 @@ class TiDE(BaseNNImputer):
     d_model :
         The dimension of the model.
 
-    n_heads :
-        The number of heads in each layer of TiDE.
+    d_hidden :
+        The dimension of the hidden layer in the model.
 
-    d_ffn :
-        The dimension of the feed-forward network.
+    d_feature_encode :
+        The dimension of the feature encoder.
 
-    factor :
-        The factor of the auto correlation mechanism for the TiDE model.
-
-    moving_avg_window_size :
-        The window size of moving average.
+    d_temporal_decoder_hidden :
+        The dimension of the hidden layer in the temporal decoder.
 
     dropout :
         The dropout rate for the model.
@@ -99,6 +96,8 @@ class TiDE(BaseNNImputer):
         better than in previous epochs.
         The "all" strategy will save every model after each epoch training.
 
+    verbose :
+        Whether to print out the training logs during the training process.
     """
 
     def __init__(
@@ -121,6 +120,7 @@ class TiDE(BaseNNImputer):
         device: Optional[Union[str, torch.device, list]] = None,
         saving_path: str = None,
         model_saving_strategy: Optional[str] = "best",
+        verbose: bool = True,
     ):
         super().__init__(
             batch_size,
@@ -130,6 +130,7 @@ class TiDE(BaseNNImputer):
             device,
             saving_path,
             model_saving_strategy,
+            verbose,
         )
 
         self.n_steps = n_steps

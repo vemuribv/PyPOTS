@@ -220,7 +220,7 @@ And what else? Please read on ;-)
 👈 Time series datasets are taken as coffee beans at PyPOTS, and POTS datasets are incomplete coffee beans with missing parts that have their own meanings.
 To make various public time-series datasets readily available to users,
 *Time Series Data Beans (TSDB)* is created to make loading time-series datasets super easy!
-Visit `TSDB <https://github.com/WenjieDu/TSDB>`_ right now to know more about this handy tool 🛠, and it now supports a total of 168 open-source datasets!
+Visit `TSDB <https://github.com/WenjieDu/TSDB>`_ right now to know more about this handy tool 🛠, and it now supports a total of 172 open-source datasets!
 
 .. image:: https://pypots.com/figs/pypots_logos/PyGrinder/logo_FFBG.svg
    :width: 150
@@ -234,14 +234,24 @@ MCAR (missing completely at random), MAR (missing at random), and MNAR (missing 
 PyGrinder supports all of them and additional functionalities related to missingness.
 With PyGrinder, you can introduce synthetic missing values into your datasets with a single line of code.
 
-.. image:: https://pypots.com/figs/pypots_logos/BrewPOTS/logo_FFBG.svg
+.. image:: https://pypots.com/figs/pypots_logos/BenchPOTS/logo_FFBG.svg
    :width: 150
    :alt: BrewPOTS logo
    :align: left
+   :target: https://github.com/WenjieDu/BenchPOTS
+
+👈 To fairly evaluate the performance of PyPOTS algorithms, the benchmarking suite [BenchPOTS](https://github.com/WenjieDu/BenchPOTS) is created,
+which provides standard and unified data-preprocessing pipelines to prepare datasets for measuring the performance of different
+POTS algorithms on various tasks.
+
+.. image:: https://pypots.com/figs/pypots_logos/BrewPOTS/logo_FFBG.svg
+   :width: 150
+   :alt: BrewPOTS logo
+   :align: right
    :target: https://github.com/WenjieDu/BrewPOTS
 
-👈 Now we have the beans, the grinder, and the pot, how to brew us a cup of coffee? Tutorials are necessary!
-Considering the future workload, PyPOTS tutorials is released in a single repo,
+👉 Now the beans, grinder, and pot are ready, please have a seat on the bench and let's think about how to brew us a cup of coffee.
+Tutorials are necessary! Considering the future workload, PyPOTS tutorials is released in a single repo,
 and you can find them in `BrewPOTS <https://github.com/WenjieDu/BrewPOTS>`_.
 Take a look at it now, and learn how to brew your POTS datasets!
 
@@ -288,12 +298,8 @@ please cite it as below and 🌟star `PyPOTS repository <https://github.com/Wenj
    @article{du2023pypots,
    title={{PyPOTS: a Python toolbox for data mining on Partially-Observed Time Series}},
    author={Wenjie Du},
+   journal={arXiv preprint arXiv:2305.18811},
    year={2023},
-   eprint={2305.18811},
-   archivePrefix={arXiv},
-   primaryClass={cs.LG},
-   url={https://arxiv.org/abs/2305.18811},
-   doi={10.48550/arXiv.2305.18811},
    }
 
 or
@@ -341,7 +347,7 @@ We care about the feedback from our users, so we're building PyPOTS community on
 
 - `Slack <https://join.slack.com/t/pypots-org/shared_invite/zt-1gq6ufwsi-p0OZdW~e9UW_IA4_f1OfxA>`_. General discussion, Q&A, and our development team are here;
 - `LinkedIn <https://www.linkedin.com/company/pypots>`_. Official announcements and news are here;
-- `WeChat (微信公众号) <https://mp.weixin.qq.com/s/sNgZmgAyxDn2sZxXoWJYMA>`_. We also run a group chat on WeChat,
+- `WeChat (微信公众号) <https://mp.weixin.qq.com/s/X3ukIgL1QpNH8ZEXq1YifA>`_. We also run a group chat on WeChat,
   and you can get the QR code from the official account after following it;
 
 If you have any suggestions or want to contribute ideas or share time-series related papers, join us and tell.
@@ -365,6 +371,7 @@ PyPOTS community is open, transparent, and surely friendly. Let's work together 
    pypots
    tsdb
    pygrinder
+   benchpots
 
 .. toctree::
    :maxdepth: 2
