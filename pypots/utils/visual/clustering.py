@@ -282,7 +282,8 @@ def plot_cluster_means(cluster_means: Dict[int, dict]) -> None:
 # goal: one plot per var, showing all time series colored by cluster assignment
 def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                             cluster_means: Dict[int, dict],
-                            gray=True) -> None:
+                            gray=True,
+                            alpha=0.1) -> None:
     """
     TO DO: fill this in
     """
@@ -309,12 +310,12 @@ def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                 if gray: 
                     plt.plot(x[s1mask], series1[s1mask], "-",
                             color='gray',
-                            alpha=0.1
+                            alpha=alpha
                     )
                 else:
                     plt.plot(x[s1mask], series1[s1mask], "-",
                             color=colors[clust],
-                            alpha=0.1
+                            alpha=alpha
                     )
             
         # MEAN OF CLUSTERS IN COLOR
