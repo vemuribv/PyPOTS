@@ -283,7 +283,9 @@ def plot_cluster_means(cluster_means: Dict[int, dict]) -> None:
 def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                             cluster_means: Dict[int, dict],
                             gray=True,
-                            alpha=0.1) -> None:
+                            alpha=0.1,
+                            background_lw=1,
+                            foreground_lw=1) -> None:
     """
     TO DO: fill this in
     """
@@ -310,12 +312,14 @@ def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                 if gray: 
                     plt.plot(x[s1mask], series1[s1mask], "-",
                             color='gray',
-                            alpha=alpha
+                            alpha=alpha,
+                            linewidth=background_lw
                     )
                 else:
                     plt.plot(x[s1mask], series1[s1mask], "-",
                             color=colors[clust],
-                            alpha=alpha
+                            alpha=alpha,
+                            linewidth=background_lw
                     )
             
         # MEAN OF CLUSTERS IN COLOR
@@ -331,6 +335,7 @@ def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                         series1[s1mask],
                         ".-",  # mean as solid line
                         color=colors[clust],
+                        linewidth=foreground_lw,
                         label="Cluster %i mean (n = %d)"
                         % (
                             clust,
@@ -347,6 +352,7 @@ def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                         series1[s1mask],
                         "--",  # CI bounds as dashed lines
                         color=colors[clust],
+                        linewidth=foreground_lw,
                     )
 
         plt.title("Var %i" % var)
