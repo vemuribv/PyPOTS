@@ -5,7 +5,7 @@ Utilities for clustering visualization.
 # Created by Bhargav Vemuri <vemuri.bhargav@gmail.com> and Wenjie Du <wenjay.du@gmail.com>
 # License: BSD-3-Clause
 
-from typing import Dict
+from typing import Dict, Optional
 
 import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
@@ -285,7 +285,8 @@ def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                             gray=True,
                             alpha=0.1,
                             background_lw=1,
-                            foreground_lw=1) -> None:
+                            foreground_lw=1,
+                            var_names: Optional[dict] = None) -> None:
     """
     TO DO: fill this in
     """
@@ -354,8 +355,10 @@ def plot_clusters_composite(dict_to_plot: Dict[int, dict],
                         color=colors[clust],
                         linewidth=foreground_lw,
                     )
-
-        plt.title("Var %i" % var)
+        if var_names:
+            plt.title(var_names[var])
+        else:
+            plt.title("Var %i" % var)
         plt.xticks(x)
         
         # add dashed line label to legend
