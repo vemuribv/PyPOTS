@@ -284,6 +284,6 @@ class TuningCommand(BaseCommand):
                 val_set = load_dict_from_h5(self._val_set)
 
             # train the model and report to NNI
-            model.fit(train_set=train_set, val_set=val_set)
+            model.fit(train_set=train_set)
         else:
             raise RuntimeError("Argument `enable_tuning` is not set. Aborting...")
